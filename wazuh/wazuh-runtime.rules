@@ -1,0 +1,4 @@
+-a always,exit -F arch=b64 -S execve -k wazuh_exec
+-a always,exit -F arch=b32 -S execve -k wazuh_exec
+-a always,exit -F arch=b64 -S connect -k wazuh_net
+-a always,exit -F arch=b32 -S connect -k wazuh_net

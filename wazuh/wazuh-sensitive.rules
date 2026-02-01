@@ -1,0 +1,6 @@
+-w /etc/passwd -p wa -k wazuh_sensitive
+-w /etc/shadow -p wa -k wazuh_sensitive
+-w /etc/sudoers -p wa -k wazuh_sensitive
+-w /etc/ssh/sshd_config -p wa -k wazuh_sensitive
+-w /etc/containerd/config.toml -p wa -k wazuh_containerd
+-w /var/lib/kubelet/pki -p wa -k wazuh_kubelet_pki

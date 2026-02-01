@@ -1,0 +1,7 @@
+-a always,exit -F arch=b64 -S connect -F auid>=1000 -F auid!=4294967295 -k wazuh_net_connect_user
+
+-a always,exit -F arch=b32 -S connect -F auid>=1000 -F auid!=4294967295 -k wazuh_net_connect_user
+
+# Outbound connect executed as root (euid=0) 
+-a always,exit -F arch=b64 -S connect -F euid=0 -k wazuh_net_connect_root
+-a always,exit -F arch=b32 -S connect -F euid=0 -k wazuh_net_connect_root
