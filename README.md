@@ -1,20 +1,63 @@
 # SEC_Lab
 ## 1. Kiến trúc Tổng thể (Architecture Overview)
-### Hệ thống được thiết kế theo mô hình Defense-in-Depth, tách biệt giám sát thành 2 tầng lớp rõ ràng:
-#### 1.	Tầng Host/Node Security (Wazuh Agent): Chịu trách nhiệm bảo vệ hệ điều hành nền tảng (OS), giám sát các tiến trình hệ thống, đăng nhập SSH và toàn vẹn file hệ thống (FIM).
-#### 2.	Tầng Workload/Container Security (Falco): Chịu trách nhiệm giám sát runtime của các container, phát hiện các hành vi bất thường bên trong Pod và audit cấu hình Kubernetes.
-### Sơ đồ vị trí Agent:
+**Hệ thống được thiết kế theo mô hình Defense-in-Depth, tách biệt giám sát thành 2 tầng lớp rõ ràng:**
  ``` 
--	Wazuh Agent:
+1.	Tầng Host/Node Security (Wazuh Agent): Chịu trách nhiệm bảo vệ hệ điều hành nền tảng (OS), giám sát các tiến trình hệ thống, đăng nhập SSH và toàn vẹn file hệ thống (FIM).
+2.	Tầng Workload/Container Security (Falco): Chịu trách nhiệm giám sát runtime của các container, phát hiện các hành vi bất thường bên trong Pod và audit cấu hình Kubernetes.
+ ```
+### Architecture – Current Implementation
+<ASCII sơ đồ hiện tại>
 
+                         +-----------------------------+
+                         |     Kubernetes Cluster      |
+                         |                             |
+                         |   +---------------------+   |
+                         |   |   Falco DaemonSet   |   |
+                         |   |  (privileged, eBPF) |   |
+                         |   +----------+----------+   |
+                         |              |              |
+                         |              v              |
+                         |        Falcosidekick        |
+                         |              |              |
+                         |           Email Alert       |
+                         |                             |
+                         +-----------------------------+
+                                       ^
+                                       |
+                     +-------------------------------------+
+                     | (Container Syscalls: exec, net)     |
+                     +-------------------------------------+
+                                       ^
+                                       |
+          +-----------------------------------------------------------+
+          |                       Node VM (Host)                      |
+          |                                                           |
+          |   +---------+                                             |
+          |   | Auditd  |  (kernel syscall audit)                     |
+          |   +----+----+                                             |
+          |        |                                                  |
+          |        v                                                  |
+          |   /var/log/audit/audit.log                                |
+          |        |                                                  |
+          |        v                                                  |
+          |   +----------------+        TCP             +------------+|
+          |   |  Wazuh Agent   | -------------------->  | Wazuh Mgr  ||
+          |   | (root, systemd)|                        |  + Index   ||
+          |   +----------------+                        +------------+|
+          |                                                           |
+          +-----------------------------------------------------------+
+
+
+### Sơ đồ vị trí Agent:
+**Wazuh Agent:**
+ ``` 
   •	Vị trí: Cài trực tiếp trên Kubernetes Node (VM).
   •	Loại hình: Systemd Service (Process nền của Linux).
   •	Quyền hạn: Chạy với quyền root để có thể đọc auditd logs và quét toàn bộ filesystem.
   •	Vai trò chính: Thu thập logs từ auditd (syscalls), Syslog, và quét FIM (File Integrity).
 ```
-``` 
--	Falco Agent:
-
+**Falco Agent:**
+```
   •	Vị trí: Triển khai dạng DaemonSet trên Kubernetes Cluster (mỗi Node một Pod).  
   •	Loại hình: Pod/Container.  
   •	Quyền hạn: Chạy privileged: true để load kernel module/eBPF probe nhằm bắt syscalls của các container khác.  
@@ -22,7 +65,7 @@
 ```
 ## 2. Chi tiết Triển khai & Cấu hình (Implementation Details)
 ### A. Giám sát Node VM (Wazuh + Auditd)
-Để đáp ứng yêu cầu giám sát runtime ở mức OS,  cấu hình tích hợp sâu giữa Wazuh và Linux Auditd (auditd).
+**Để đáp ứng yêu cầu giám sát runtime ở mức OS,  cấu hình tích hợp sâu giữa Wazuh và Linux Auditd (auditd).**
 #### 1. Process Execution Monitoring:
 ```
 Sử dụng auditd để bắt syscall execve và execveat. Cấu hình phân loại rõ ràng:
@@ -54,7 +97,8 @@ Falco được cấu hình sử dụng kết hợp 2 bộ rule:
   •	Sử dụng công cụ mạng (netcat, nmap) trong container.
 
 ## 3. Luồng dữ liệu End-to-End (Data Flow)
-Hệ thống xử lý hai luồng dữ liệu song song:
+
+**Hệ thống xử lý hai luồng dữ liệu song song:**
 ##### Luồng 1: Node VM Monitoring (Wazuh)
 ```
 1.	Thu thập: Wazuh Agent đọc dữ liệu từ audit.log (Kernel Audit), syslog, và quét file thay đổi (FIM)…
@@ -89,58 +133,16 @@ Hệ thống xử lý hai luồng dữ liệu song song:
 3.	Hiệu năng Node:
   •	Falco chạy eBPF/Kernel module có thể chiếm 1-3% CPU. Nếu lưu lượng syscall quá lớn (ví dụ Database High-load), Falco có thể làm chậm ứng dụng (drop syscalls).
 ```
-## 6. Architecture Overview
-### Architecture – Current Implementation
-<ASCII sơ đồ hiện tại>
+## 6. Future Upgrade
 
-                         +-----------------------------+
-                         |     Kubernetes Cluster      |
-                         |                             |
-                         |   +---------------------+   |
-                         |   |   Falco DaemonSet   |   |
-                         |   |  (privileged, eBPF) |   |
-                         |   +----------+----------+   |
-                         |              |              |
-                         |              v              |
-                         |        Falcosidekick        |
-                         |              |              |
-                         |           Email Alert       |
-                         |                             |
-                         +-----------------------------+
-                                      ^
-                                      |
-                     +-------------------------------------+
-                     | (Container Syscalls: exec, net)     |
-                     +-------------------------------------+
-                                      ^
-                                      |
-          +-----------------------------------------------------------+
-          |                       Node VM (Host)                      |
-          |                                                           |
-          |   +---------+                                             |
-          |   | Auditd  |  (kernel syscall audit)                     |
-          |   +----+----+                                             |
-          |        |                                                  |
-          |        v                                                  |
-          |   /var/log/audit/audit.log                                |
-          |        |                                                  |
-          |        v                                                  |
-          |   +----------------+        TCP/1514        +------------+|
-          |   |  Wazuh Agent   | -------------------->  | Wazuh Mgr  ||
-          |   | (root, systemd)|                        |  + Index   ||
-          |   +----------------+                        +------------+|
-          |                                                           |
-          +-----------------------------------------------------------+
-
-
-### Data Flow Explanation
+### Data Flow Explanation (Current)
 Falco giám sát container runtime và sinh alert độc lập
 
 Wazuh giám sát node VM runtime và có control plane riêng
 
 ❌ Hai pipeline song song, không correlation node ↔ container
 
-### Architecture – Target Design (Future Upgrade)
+### Architecture – Target Design
 Falco = Runtime Security Control Plane duy nhất
 Wazuh = Node-level security sensor
 
@@ -194,7 +196,7 @@ Container
           → Alert / Report
 ```
 
-- Phát hiện: shell spawn, network bất thường, file access
+- Phát hiện: shell spawn, network bất thường, file access,...
 - Có đầy đủ metadata: Pod, Namespace, Image
 
 
