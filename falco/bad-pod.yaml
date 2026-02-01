@@ -10,15 +10,13 @@ spec:
   - name: hacker-container
     image: ubuntu
     command: ["/bin/bash", "-c", "sleep 3600"]
-    # VI PHẠM 1: Chạy Privileged (Quyền tối cao)
     securityContext:
       privileged: true
-    # VI PHẠM 2: Mount thư mục nhạy cảm của Host
     volumeMounts:
     - mountPath: /host-etc
       name: host-fs
-    # VI PHẠM 3: Thiếu resources (CPU/Memory limits) -> Falco sẽ quét thấy cái này
   volumes:
   - name: host-fs
     hostPath:
+
       path: /etc
