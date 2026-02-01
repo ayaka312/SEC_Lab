@@ -6,47 +6,7 @@
 2.	Tầng Workload/Container Security (Falco): Chịu trách nhiệm giám sát runtime của các container, phát hiện các hành vi bất thường bên trong Pod và audit cấu hình Kubernetes.
  ```
 ### Architecture – Current Implementation
-<ASCII sơ đồ hiện tại>
-
-                         +-----------------------------+
-                         |     Kubernetes Cluster      |
-                         |                             |
-                         |   +---------------------+   |
-                         |   |   Falco DaemonSet   |   |
-                         |   |  (privileged, eBPF) |   |
-                         |   +----------+----------+   |
-                         |              |              |
-                         |              v              |
-                         |        Falcosidekick        |
-                         |              |              |
-                         |           Email Alert       |
-                         |                             |
-                         +-----------------------------+
-                                       ^
-                                       |
-                     +-------------------------------------+
-                     | (Container Syscalls: exec, net)     |
-                     +-------------------------------------+
-                                       ^
-                                       |
-          +-----------------------------------------------------------+
-          |                       Node VM (Host)                      |
-          |                                                           |
-          |   +---------+                                             |
-          |   | Auditd  |  (kernel syscall audit)                     |
-          |   +----+----+                                             |
-          |        |                                                  |
-          |        v                                                  |
-          |   /var/log/audit/audit.log                                |
-          |        |                                                  |
-          |        v                                                  |
-          |   +----------------+        TCP             +------------+|
-          |   |  Wazuh Agent   | -------------------->  | Wazuh Mgr  ||
-          |   | (root, systemd)|                        |  + Index   ||
-          |   +----------------+                        +------------+|
-          |                                                           |
-          +-----------------------------------------------------------+
-
+<img width="624" height="711" alt="image" src="https://github.com/user-attachments/assets/3ca60ae3-2f83-4819-88b6-2deb7c308599" />
 
 ### Sơ đồ vị trí Agent:
 **Wazuh Agent:**
@@ -125,7 +85,7 @@ Falco được cấu hình sử dụng kết hợp 2 bộ rule:
 **Nếu hệ thống mở rộng lên hàng trăm nodes hoặc triển khai Multi-tenant, các vấn đề sau sẽ phát sinh:**
 ```
 1.	Nút thắt cổ chai tại Control Plane (Bottleneck):
-  •	Wazuh Manager: Là điểm tập trung duy nhất. Nếu quá nhiều Agent gửi log cùng lúc, Manager sẽ bị quá tải (CPU/Network). -> Giải pháp: Cần triển khai Wazuh Cluster (Master/Worker).
+  •	Wazuh Manager: Là điểm tập trung duy nhất. Nếu quá nhiều Agent gửi log cùng lúc, Manager sẽ bị quá tải (CPU/Network). -> Giải pháp: Cần triển khai Wazuh Cluster (Master/Worker) phía sau Load Balancer, đồng thời triển khai Indexer theo dạng cluster để đảm bảo khả năng scale và chịu tải. 
   •	K8s Metacollector: Khi cluster quá lớn, lượng event từ K8s API Server rất khủng khiếp, Pod này có thể bị OOM (Out Of Memory).
 2.	Vấn đề Multi-tenant (Nhiều team dùng chung):
   •	Hiện tại Falco Rules áp dụng cho toàn bộ Cluster. Khó để team A có bộ luật riêng khác team B.
@@ -144,41 +104,11 @@ Wazuh giám sát node VM runtime và có control plane riêng
 
 ### Architecture – Target Design
 Falco = Runtime Security Control Plane duy nhất
+
 Wazuh = Node-level security sensor
 
-<ASCII sơ đồ nâng cấp>
+<img width="585" height="713" alt="image" src="https://github.com/user-attachments/assets/7711ab20-6a9e-47d7-960a-40d9e56ecda8" />
 
-                    +--------------------------------------+
-                    |        Kubernetes Cluster            |
-                    |                                      |
-                    |   +------------------------------+   |
-                    |   |     Falco Control Plane      |   |
-                    |   |                              |   |
-                    |   |  - Falco Engine              |   |
-                    |   |  - Runtime Rules             |   |
-                    |   |  - K8s Audit / Config Rules  |   |
-                    |   +--------------+---------------+   |
-                    |                  |                   |
-                    |           Falcosidekick              |
-                    |                  |                   |
-                    |        Alert / Report / SIEM         |
-                    +--------------------------------------+
-          
-                        ^                               ^
-                        |                               |
-             (Container Runtime Events)       (Node Runtime Events)
-          
-              +--------------------------+      +--------------------------+
-              |     Falco DaemonSet      |      |      Wazuh Agent         |
-              |  (per-node, privileged)  |      |   (systemd, root)        |
-              +------------+-------------+      +------------+-------------+
-                       |                                   |
-                       v                                   v
-                 +----------------------+              +---------+
-                 |  Kernel Syscalls     |              | Auditd  |
-                 | (exec, file, net)    |              | (kernel)|
-                 +----------------------+              +---------+
-                                                       
 
 ### Data Flow Explanation
 #### Luồng A – Container Runtime
