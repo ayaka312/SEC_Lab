@@ -1,0 +1,119 @@
+customRules:
+  tragtt-runtime-rules.yaml: |-
+    # ====================================================
+    # Tragtt Lab - Runtime Detection Rules (Falco)
+    # Prefix search: "Tragtt" / Output prefix: "TragttRuntime:"
+    # ====================================================
+
+    # ---- Allowlist namespaces để giảm false positive ----
+    - list: tragtt_allowed_namespaces
+      items: [kube-system, security-system, gke-managed-cim, cert-manager, kube-public]
+
+    # ---- Suspicious processes thường dùng để exploit/exfil ----
+    - list: tragtt_suspicious_processes
+      items: [cat, sh, bash, ash, zsh, ksh, curl, wget, python, python3, node, perl, ruby, nc, ncat, netcat, socat, telnet]
+
+    # ---- Sensitive file paths ----
+    - list: tragtt_sensitive_paths
+      items:
+        - /var/run/secrets/kubernetes.io/serviceaccount/token
+        - /etc/shadow
+        - /root/.ssh/id_rsa
+        - /root/.ssh/id_ed25519
+        - /root/.ssh/authorized_keys
+
+    # ---- Suspicious remote admin / lateral movement ports ----
+    # 22=SSH, 23=Telnet, 3389=RDP, 445=SMB, 5900=VNC
+    - list: tragtt_remote_admin_ports
+      items: [22, 23, 3389, 445, 5900]
+
+    # ====================================================
+    # RULE 1: Interactive shell spawn trong container
+    # Kịch bản: RCE/exec → spawn shell để điều khiển
+    # FP: debug pod hợp lệ
+    # ====================================================
+    - rule: Tragtt - Interactive Shell Spawned in Container
+      desc: Detect interactive shells spawned inside containers (possible RCE / exec / webshell)
+      condition: >
+        spawned_process and container and
+        (proc.name in (sh, bash, ash, zsh, ksh)) and
+        proc.tty != 0 and
+        not (k8s.ns.name in (tragtt_allowed_namespaces))
+      output: >
+        TragttRuntime: Shell spawned (user=%user.name cmd=%proc.cmdline tty=%proc.tty pod=%k8s.pod.name ns=%k8s.ns.name container=%container.name image=%container.image.repository:%container.image.tag)
+      priority: WARNING
+      tags: [tragtt, runtime, shell, rce]
+
+    # ====================================================
+    # RULE 2: Đọc file nhạy cảm bởi process đáng nghi
+    # Kịch bản: đọc SA token/shadow/ssh key để leo thang hoặc exfil
+    # FP: system controllers đọc token hợp lệ (cert-manager, controller...)
+    # Giảm FP: chỉ alert khi process thuộc suspicious list hoặc interactive (tty)
+    # ====================================================
+    - rule: Tragtt - Sensitive File Read by Suspicious Process
+      desc: Detect reads of sensitive files by suspicious tooling (more signal, less FP)
+      condition: >
+        open_read and container and
+        fd.name in (tragtt_sensitive_paths) and
+        (proc.name in (tragtt_suspicious_processes) or proc.tty != 0) and
+        not (k8s.ns.name in (tragtt_allowed_namespaces))
+      output: >
+        TragttRuntime: Sensitive file read (file=%fd.name user=%user.name proc=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name container=%container.name image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [tragtt, runtime, credential_access]
+
+    # ====================================================
+    # RULE 3: Container connect tới Cloud Metadata IP (credential theft)
+    # Kịch bản: attacker lấy cloud credentials từ metadata service 169.254.169.254
+    # ====================================================
+    - rule: Tragtt - Container Access Cloud Metadata
+      desc: Detect container connections to cloud metadata service (credential theft technique)
+      condition: >
+        evt.type=connect and container and
+        fd.sip=169.254.169.254 and
+        not (k8s.ns.name in (tragtt_allowed_namespaces))
+      output: >
+        TragttRuntime: Metadata IP connection (dest=%fd.sip:%fd.sport proc=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name container=%container.name image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [tragtt, runtime, network, credential_access]
+
+    # ====================================================
+    # RULE 4: Ghi file dưới /etc trong container (tamper/persistence)
+    # ====================================================
+    - rule: Tragtt - Write Under /etc in Container
+      desc: Detect writes under /etc inside containers (suspicious tampering/persistence)
+      condition: >
+        open_write and container and
+        fd.name startswith /etc and
+        not (k8s.ns.name in (tragtt_allowed_namespaces))
+      output: >
+        TragttRuntime: Write under /etc (file=%fd.name user=%user.name proc=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name)
+      priority: WARNING
+      tags: [tragtt, runtime, tampering]
+
+    # ====================================================
+    # RULE 5 (Network bổ sung - KHÔNG dùng CIDR):
+    # Container outbound tới remote-admin/lateral movement ports
+    # Kịch bản: attacker pivot trong cluster, brute force SSH, SMB lateral movement, RDP/VNC
+    # False positive: workload thật sự cần SSH/SMB (hiếm) → có thể allowlist ns/app sau
+    # ====================================================
+    - rule: Tragtt - Container Outbound to Remote Admin Ports
+      desc: Detect container outbound connections to remote admin ports (SSH/Telnet/RDP/SMB/VNC)
+      condition: >
+        evt.type=connect and container and
+        fd.sport in (tragtt_remote_admin_ports) and
+        not (k8s.ns.name in (tragtt_allowed_namespaces))
+      output: >
+        TragttRuntime: Outbound to remote-admin port (dest=%fd.sip:%fd.sport proc=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name container=%container.name image=%container.image.repository:%container.image.tag)
+      priority: WARNING
+      tags: [tragtt, runtime, network, lateral_movement]
+    - rule: Tragtt - Suspicious Network Tool Executed in Container
+      desc: Detect execution of common network tools used for scanning/lateral movement (nc/nmap/socat/telnet)
+      condition: >
+        spawned_process and container and
+        (proc.name in (nc, ncat, netcat, nmap, socat, telnet)) and
+        not (k8s.ns.name in (tragtt_allowed_namespaces))
+      output: >
+        TragttRuntime: Network tool executed (proc=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name container=%container.name image=%container.image.repository:%container.image.tag)
+      priority: WARNING
+      tags: [tragtt, runtime, network, lateral_movement]

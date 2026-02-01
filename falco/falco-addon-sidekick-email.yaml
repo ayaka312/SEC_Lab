@@ -1,0 +1,12 @@
+falcosidekick:
+  enabled: true
+  config:
+    smtp:
+      host: smtp.gmail.com
+      port: 587
+      tls: !!bool true
+
+      user: tratran03012000@gmail.com
+      from: tratran03012000@gmail.com
+      to: trangtran03012000@gmail.com
+      password: GMAIL_APP_PASSWORD
