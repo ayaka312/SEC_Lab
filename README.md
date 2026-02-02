@@ -19,6 +19,25 @@ Trong thiết kế này, Wazuh không đóng vai trò control plane, mà chỉ l
 |File|	Mô tả|
 |----|------|
 |ossec.conf|	Cấu hình Wazuh Agent, bao gồm đọc audit log và File Integrity Monitoring|
+### DEMO/
+#### Demo 1 – Container Runtime (Falco)
+
+- Bên trong container, việc cài và chạy nc để kết nối mạng là hành vi bất thường.
+
+- Falco DaemonSet (chạy privileged, dùng eBPF) phát hiện:
+ 
+  - Thực thi công cụ mạng (nc) → rule Suspicious Network Tool Executed in Container
+
+  - Ghi file dưới /etc trong container → rule Write Under /etc in Container
+    
+    (Đây là rule custom)
+ 
+- Falco sinh cảnh báo kèm Pod, Namespace, Image,...
+#### Demo 2 – Node VM Runtime (Wazuh)
+
+- Hành vi này tạo rồi xoá file trong /etc/sudoers.d/, là thư mục nhạy cảm liên quan đến privilege escalation.
+- Wazuh Agent chạy trên Node VM với quyền root phát hiện ngay thông qua File Integrity Monitoring (FIM) realtime, sinh cảnh báo khi file được tạo và bị xoá.
+
 
 ## 1. Kiến trúc Tổng thể (Architecture Overview)
 **Hệ thống được thiết kế theo mô hình Defense-in-Depth, tách biệt giám sát thành 2 tầng lớp rõ ràng:**
@@ -51,8 +70,8 @@ Trong thiết kế này, Wazuh không đóng vai trò control plane, mà chỉ l
 Theo dõi realtime các thư mục và file quan trọng như:
 - /etc
 - /etc/containerd
-- /var/lib/kubelet/pki
-Qua đó phát hiện các thay đổi cấu hình ảnh hưởng trực tiếp đến bảo mật node và container runtime.
+- /var/lib/kubelet/pki,...
+Qua đó phát hiện các thay đổi cấu hình ảnh hưởng trực tiếp đến bảo mật node, runtime.
 ```
 **Thu thập telemetry runtime của hệ điều hành**
 ```
@@ -60,7 +79,6 @@ Qua đó phát hiện các thay đổi cấu hình ảnh hưởng trực tiếp 
 - Process execution
 - Network activity
 - Các sự kiện hệ thống quan trọng
-Telemetry được thu thập ở mức kernel/OS nhưng không áp dụng quá nhiều rule tuỳ chỉnh nhằm hạn chế false positive.
 ```
 
 **Cung cấp System Context**
@@ -71,7 +89,7 @@ Thu thập inventory của node VM bao gồm hệ điều hành, tiến trình, 
 ### B. Giám sát Workload Container (Falco)
 Falco được cấu hình sử dụng kết hợp 2 bộ rule:
 - Default Rules: Bộ rule chuẩn của cộng đồng (phát hiện shell, crypto mining, container escape cơ bản).
-- Custom Rules (tragtt-runtime-rules.yaml): Các rule tự phát triển để giảm nhiễu (False Positive) và tập trung vào các kịch bản cụ thể như (một vài case demo và có thể phát triển them ở rule custom này):
+- Custom Rules (tragtt-runtime-rules.yaml): Các rule tự phát triển tập trung vào các kịch bản cụ thể như:
 
   •	Spawn interactive shell trong namespace Production.
   
@@ -98,13 +116,13 @@ Falco được cấu hình sử dụng kết hợp 2 bộ rule:
 3.	Xử lý: Nếu vi phạm, Falco đẩy log JSON sang Falcosidekick.
 4.	Báo cáo: Falcosidekick format lại bản tin và gửi cảnh báo qua SMTP (Gmail) tới quản trị viên.
 ```
-## 4. Quyết định thiết kế chính (Design Decisions)
+## 4. Design Decisions
 ```
 •	Tại sao dùng Falco cho Container: Falco thấu hiểu ngữ cảnh Kubernetes (Namespace, Pod Name, Image) tốt hơn Wazuh. Wazuh chỉ nhìn thấy process ID trên host mà không biết process đó thuộc Pod nào.
 •	Tại sao dùng Wazuh cho Node: Falco tập trung vào syscall stream, không mạnh về File Integrity Monitoring (FIM) hay log analysis của OS (như SSH login failure) bằng Wazuh. Kết hợp cả hai lấp đầy các điểm mù.
 •	Kênh cảnh báo (Alerting): Sử dụng Email cho các cảnh báo runtime từ Falco để đảm bảo tính tức thời (Real-time).
 ```
-## 5. Phân tích mở rộng & Điểm nghẽn (Scalability & Bottlenecks)
+## 5. Scalability & Bottlenecks
 **Nếu hệ thống mở rộng lên hàng trăm nodes hoặc triển khai Multi-tenant, các vấn đề sau sẽ phát sinh:**
 ```
 1.	Nút thắt cổ chai tại Control Plane (Bottleneck):
