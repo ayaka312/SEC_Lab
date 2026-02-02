@@ -1,5 +1,0 @@
-# Log all commands executed as root
--a always,exit -F arch=b64 -S execve -S execveat -F euid=0 -k wazuh_exec_root
-
-# Log commands executed by real users (auid>=1000) and ignore unset auid
--a always,exit -F arch=b64 -S execve -S execveat -F auid>=1000 -F auid!=4294967295 -k wazuh_exec_user
