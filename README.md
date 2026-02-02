@@ -19,16 +19,12 @@ Trong thiết kế này, Wazuh không đóng vai trò control plane, mà chỉ l
 |File|	Mô tả|
 |----|------|
 |ossec.conf|	Cấu hình Wazuh Agent, bao gồm đọc audit log và File Integrity Monitoring|
-|wazuh-exec.rules|	Audit rule giám sát process execution |
-|wazuh-network.rules|	Audit rule giám sát network activity|
-|wazuh-runtime.rules|	Tập hợp rule giám sát runtime OS tổng hợp|
-|wazuh-sensitive.rules|	Audit rule theo dõi truy cập các file nhạy cảm như /etc/passwd, /etc/shadow, /etc/ssh/sshd_config,...|
 
 ## 1. Kiến trúc Tổng thể (Architecture Overview)
 **Hệ thống được thiết kế theo mô hình Defense-in-Depth, tách biệt giám sát thành 2 tầng lớp rõ ràng:**
  ``` 
-1.	Tầng Host/Node Security (Wazuh Agent): Chịu trách nhiệm bảo vệ hệ điều hành nền tảng (OS), giám sát các tiến trình hệ thống, đăng nhập SSH và toàn vẹn file hệ thống (FIM).
-2.	Tầng Workload/Container Security (Falco): Chịu trách nhiệm giám sát runtime của các container, phát hiện các hành vi bất thường bên trong Pod và audit cấu hình Kubernetes.
+1.	Tầng Host/Node Security (Wazuh Agent): Chịu trách nhiệm bảo vệ hệ điều hành nền tảng (OS), giám sát các tiến trình hệ thống, đăng nhập SSH và toàn vẹn file hệ thống (FIM),...
+2.	Tầng Workload/Container Security (Falco): Chịu trách nhiệm giám sát runtime của các container, phát hiện các hành vi bất thường bên trong Pod,... và audit cấu hình Kubernetes.
  ```
 ### Architecture – Current Implementation
 <img width="624" height="711" alt="image" src="https://github.com/user-attachments/assets/3ca60ae3-2f83-4819-88b6-2deb7c308599" />
@@ -39,37 +35,39 @@ Trong thiết kế này, Wazuh không đóng vai trò control plane, mà chỉ l
   •	Vị trí: Cài trực tiếp trên Kubernetes Node (VM).
   •	Loại hình: Systemd Service (Process nền của Linux).
   •	Quyền hạn: Chạy với quyền root để có thể đọc auditd logs và quét toàn bộ filesystem.
-  •	Vai trò chính: Thu thập logs từ auditd (syscalls), Syslog, và quét FIM (File Integrity).
+  •	Vai trò chính: Agent này đóng vai trò là node-level security sensor, chịu trách nhiệm giám sát các hành vi runtime của hệ điều hành nền bên dưới Kubernetes.
 ```
 **Falco Agent:**
 ```
   •	Vị trí: Triển khai dạng DaemonSet trên Kubernetes Cluster (mỗi Node một Pod).  
   •	Loại hình: Pod/Container.  
-  •	Quyền hạn: Chạy privileged: true để load kernel module/eBPF probe nhằm bắt syscalls của các container khác.  
+  •	Quyền hạn: Chạy privileged: true; để load kernel module/eBPF probe nhằm bắt syscalls của các container khác.  
   •	Vai trò chính: Bắt syscalls container qua kernel module/eBPF, tích hợp K8s Metadata.
 ```
 ## 2. Chi tiết Triển khai & Cấu hình (Implementation Details)
-### A. Giám sát Node VM (Wazuh + Auditd)
-**Để đáp ứng yêu cầu giám sát runtime ở mức OS,  cấu hình tích hợp sâu giữa Wazuh và Linux Auditd (auditd).**
-#### 1. Process Execution Monitoring:
+### A. Giám sát Node VM (Wazuh)
+**Giám sát truy cập và thay đổi file nhạy cảm (File Integrity Monitoring – FIM)**
 ```
-Sử dụng auditd để bắt syscall execve và execveat. Cấu hình phân loại rõ ràng:
-•	Root Activity: Giám sát mọi lệnh chạy bởi root (euid=0) -> Key: wazuh_exec_root.
-•	User Activity: Giám sát lệnh chạy bởi user thực (auid>=1000) -> Key: wazuh_exec_user.
-•	Mục tiêu: Phát hiện hacker leo thang đặc quyền hoặc chạy mã độc trực tiếp trên Host.
+Theo dõi realtime các thư mục và file quan trọng như:
+- /etc
+- /etc/containerd
+- /var/lib/kubelet/pki
+Qua đó phát hiện các thay đổi cấu hình ảnh hưởng trực tiếp đến bảo mật node và container runtime.
 ```
-#### 2. Network Activity Monitoring:
+**Thu thập telemetry runtime của hệ điều hành**
 ```
-Giám sát các kết nối mạng chiều đi (Outbound) thông qua syscall connect.
-•	Scope: Giám sát cả Root và User Interactive.
-•	Mục tiêu: Phát hiện C2 Beaconing hoặc hành vi tải malware từ internet về node (curl, wget).
+Đọc log từ Linux Auditd và các system log để ghi nhận:
+- Process execution
+- Network activity
+- Các sự kiện hệ thống quan trọng
+Telemetry được thu thập ở mức kernel/OS nhưng không áp dụng quá nhiều rule tuỳ chỉnh nhằm hạn chế false positive.
 ```
-#### 3. File Integrity & Sensitive Access:
+
+**Cung cấp System Context**
 ```
-Sử dụng mô hình lai (Hybrid):
-•	Real-time Alert (Auditd): Đặt watch (-w) lên các file nhạy cảm như /etc/shadow, /etc/passwd, /etc/ssh/sshd_config. Bất kỳ hành vi đọc/ghi nào đều sinh log ngay lập tức.
-•	Content Change (Wazuh FIM): Cấu hình syscheck quét realtime các thư mục quan trọng (/etc/containerd, /var/lib/kubelet/pki) để phát hiện file bị thay đổi nội dung hoặc file lạ mới sinh ra.
+Thu thập inventory của node VM bao gồm hệ điều hành, tiến trình, cổng mạng và gói cài đặt, giúp hiểu rõ trạng thái runtime của node tại thời điểm xảy ra sự kiện.
 ```
+
 ### B. Giám sát Workload Container (Falco)
 Falco được cấu hình sử dụng kết hợp 2 bộ rule:
 - Default Rules: Bộ rule chuẩn của cộng đồng (phát hiện shell, crypto mining, container escape cơ bản).
@@ -86,7 +84,7 @@ Falco được cấu hình sử dụng kết hợp 2 bộ rule:
 **Hệ thống xử lý hai luồng dữ liệu song song:**
 ##### Luồng 1: Node VM Monitoring (Wazuh)
 ```
-1.	Thu thập: Wazuh Agent đọc dữ liệu từ audit.log (Kernel Audit), syslog, và quét file thay đổi (FIM)…
+1.	Thu thập: Wazuh Agent chạy trên Node VM với quyền root thu thập telemetry runtime từ hệ điều hành, bao gồm auditd (process, network) và File Integrity Monitoring (FIM) đối với các file nhạy cảm,...
 2.	Chuyển tiếp: Agent mã hóa dữ liệu và gửi qua TCP port 1514 về Wazuh Manager (Control Plane).
 3.	Phân tích: Wazuh Manager giải mã (Decoder) và đối chiếu với Rule.
 4.	Lưu trữ & Hiển thị: Cảnh báo được lưu vào Indexer (Elasticsearch/OpenSearch) và hiển thị trên Wazuh Dashboard.
@@ -102,8 +100,8 @@ Falco được cấu hình sử dụng kết hợp 2 bộ rule:
 ```
 ## 4. Quyết định thiết kế chính (Design Decisions)
 ```
-•	Tại sao dùng Falco cho Container? Falco thấu hiểu ngữ cảnh Kubernetes (Namespace, Pod Name, Image) tốt hơn Wazuh. Wazuh chỉ nhìn thấy process ID trên host mà không biết process đó thuộc Pod nào.
-•	Tại sao dùng Wazuh cho Node? Falco tập trung vào syscall stream, không mạnh về File Integrity Monitoring (FIM) hay log analysis của OS (như SSH login failure) bằng Wazuh. Kết hợp cả hai lấp đầy các điểm mù.
+•	Tại sao dùng Falco cho Container: Falco thấu hiểu ngữ cảnh Kubernetes (Namespace, Pod Name, Image) tốt hơn Wazuh. Wazuh chỉ nhìn thấy process ID trên host mà không biết process đó thuộc Pod nào.
+•	Tại sao dùng Wazuh cho Node: Falco tập trung vào syscall stream, không mạnh về File Integrity Monitoring (FIM) hay log analysis của OS (như SSH login failure) bằng Wazuh. Kết hợp cả hai lấp đầy các điểm mù.
 •	Kênh cảnh báo (Alerting): Sử dụng Email cho các cảnh báo runtime từ Falco để đảm bảo tính tức thời (Real-time).
 ```
 ## 5. Phân tích mở rộng & Điểm nghẽn (Scalability & Bottlenecks)
