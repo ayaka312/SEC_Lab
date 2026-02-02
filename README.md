@@ -1,4 +1,29 @@
 # SEC_Lab
+## Repository Structure & Architecture Mapping
+**Repository này được tổ chức theo hướng platform-centric, trong đó mỗi nhóm file ánh xạ trực tiếp tới một thành phần trong kiến trúc runtime security của hệ thống.**
+### falco/ – Container & Kubernetes Runtime Security
+
+Thư mục falco/ chứa toàn bộ cấu hình liên quan đến Falco Runtime Security Control Plane và các agent chạy trong Kubernetes cluster.
+
+|File|	Mô tả|
+|----|------|
+|falco-values.yaml|	File Helm values chính để triển khai Falco DaemonSet, cấu hình driver (modern eBPF), quyền privileged và tích hợp Kubernetes metadata|
+|falco-custom-values.yaml|	Các rule runtime tự xây dựng để phát hiện hành vi bất thường trong container (spawn shell, network bất thường, truy cập file nhạy cảm, …)|
+|falco-addon-sidekick-email.yaml|	Manifest triển khai Falcosidekick độc lập để routing alert từ Falco tới email (có thể mở rộng sang webhook/SIEM)
+
+### wazuh/ – Node VM Runtime Telemetry (Sensor Layer)
+
+Thư mục wazuh/ chứa các cấu hình phục vụ giám sát runtime ở cấp độ hệ điều hành của node VM.
+Trong thiết kế này, Wazuh không đóng vai trò control plane, mà chỉ là node security sensor.
+
+|File|	Mô tả|
+|----|------|
+|ossec.conf|	Cấu hình Wazuh Agent, bao gồm đọc audit log và File Integrity Monitoring|
+|wazuh-exec.rules|	Audit rule giám sát process execution |
+|wazuh-network.rules|	Audit rule giám sát network activity|
+|wazuh-runtime.rules|	Tập hợp rule giám sát runtime OS tổng hợp|
+|wazuh-sensitive.rules|	Audit rule theo dõi truy cập các file nhạy cảm như /etc/passwd, /etc/shadow, /etc/ssh/sshd_config,...|
+
 ## 1. Kiến trúc Tổng thể (Architecture Overview)
 **Hệ thống được thiết kế theo mô hình Defense-in-Depth, tách biệt giám sát thành 2 tầng lớp rõ ràng:**
  ``` 
